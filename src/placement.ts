@@ -281,6 +281,25 @@ export class PlacementController {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (this.isEditableTarget(event.target)) {
+      return;
+    }
+
+    if (event.ctrlKey && !event.metaKey) {
+      const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        this.undo();
+        return;
+      }
+
+      if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault();
+        this.redo();
+        return;
+      }
+    }
+
     const state = this.options.store.getState();
     const lower = event.key.toLowerCase();
 
@@ -823,5 +842,14 @@ export class PlacementController {
     }
 
     return false;
+  }
+
+  private isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
   }
 }

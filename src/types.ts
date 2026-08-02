@@ -4,10 +4,23 @@ export type Tool = 'build' | 'select' | 'erase';
 
 export interface BrickDefinition {
   id: string;
+  name: string;
+  category: string;
   width: number;
   length: number;
   height: number;
-  shape: 'block' | 'slope';
+  shape:
+    | 'block'
+    | 'plate'
+    | 'tile'
+    | 'slope'
+    | 'wedge'
+    | 'round'
+    | 'quarter_round'
+    | 'arch'
+    | 'cylinder'
+    | 'chest'
+    | 'flag';
 }
 
 export interface BrickInstance {

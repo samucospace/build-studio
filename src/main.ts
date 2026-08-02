@@ -15,7 +15,7 @@ if (!app) {
 
 const initialState: AppState = {
   activeTool: 'build',
-  activeBrickType: '2x2',
+  activeBrickType: '2x2_brick',
   activeColor: '#E53935',
   snapToGrid: true,
   rotation: { x: 0, y: 0, z: 0 },
@@ -108,6 +108,7 @@ store.subscribe((state) => {
   ui.setSnapState(state.snapToGrid);
   ui.setToolState(state.activeTool);
   ui.setSelectedBrick(state.selectedBrickId);
+  ui.setActiveBrickType(state.activeBrickType);
   ui.setHintContext({
     tool: state.activeTool,
     snapEnabled: state.snapToGrid,

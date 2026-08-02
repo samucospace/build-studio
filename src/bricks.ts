@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { BRICK_UNITS, BRICK_TYPES } from './constants';
+import { BRICK_TYPES } from './constants';
 import type { BrickDefinition, BrickInstance } from './types';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 interface BrickRenderGroup {
   key: string;
@@ -49,31 +49,147 @@ function createSlopeBody(definition: BrickDefinition): THREE.BufferGeometry {
   return geometry;
 }
 
+function createWedgeBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  shape.moveTo(-definition.width / 2, 0);
+  shape.lineTo(definition.width / 2, 0);
+  shape.lineTo(0, definition.height);
+  shape.lineTo(-definition.width / 2, 0);
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: definition.length,
+    bevelEnabled: false,
+  });
+  geometry.translate(0, 0, -definition.length / 2);
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createRoundBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const radius = Math.min(definition.width, definition.length) / 2;
+  const geometry = new THREE.CylinderGeometry(radius, radius, definition.height, 28);
+  geometry.rotateX(Math.PI / 2);
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createQuarterRoundBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const radius = Math.min(definition.width, definition.length);
+  const arc = new THREE.Shape();
+  arc.moveTo(0, 0);
+  arc.absarc(0, 0, radius, 0, Math.PI / 2, false);
+  arc.lineTo(0, 0);
+
+  const geometry = new THREE.ExtrudeGeometry(arc, {
+    depth: definition.height,
+    bevelEnabled: false,
+  });
+  geometry.rotateX(Math.PI / 2);
+  geometry.rotateY(Math.PI / 2);
+  geometry.translate(-radius / 2, definition.height / 2, -radius / 2);
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createArchBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const pillarWidth = Math.max(0.28, definition.width * 0.32);
+  const spanHeight = definition.height;
+  const topThickness = Math.max(0.22, definition.width * 0.28);
+
+  const leftPillar = new THREE.BoxGeometry(pillarWidth, spanHeight, definition.length);
+  leftPillar.translate(-(definition.width - pillarWidth) / 2, spanHeight / 2, 0);
+
+  const rightPillar = new THREE.BoxGeometry(pillarWidth, spanHeight, definition.length);
+  rightPillar.translate((definition.width - pillarWidth) / 2, spanHeight / 2, 0);
+
+  const topBar = new THREE.BoxGeometry(definition.width, topThickness, definition.length);
+  topBar.translate(0, spanHeight + topThickness / 2, 0);
+
+  const merged = mergeGeometries([leftPillar, rightPillar, topBar], false);
+  const geometry = merged ?? topBar;
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createCylinderBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const radius = Math.min(definition.width, definition.length) / 2;
+  const geometry = new THREE.CylinderGeometry(radius, radius, definition.height, 24);
+  geometry.rotateX(Math.PI / 2);
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createChestBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const baseHeight = definition.height * 0.58;
+  const lidHeight = definition.height * 0.42;
+
+  const base = new THREE.BoxGeometry(definition.width, baseHeight, definition.length);
+  base.translate(0, baseHeight / 2, 0);
+
+  const lidRadius = Math.min(definition.width, lidHeight) / 2;
+  const lid = new THREE.CylinderGeometry(lidRadius, lidRadius, definition.length, 18, 1, false, 0, Math.PI);
+  lid.rotateZ(Math.PI / 2);
+  lid.translate(0, baseHeight + lidHeight * 0.5, 0);
+
+  const merged = mergeGeometries([base, lid], false);
+  const geometry = merged ?? base;
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createFlagBody(definition: BrickDefinition): THREE.BufferGeometry {
+  const poleRadius = Math.max(0.08, Math.min(definition.width, definition.length) * 0.11);
+  const poleHeight = definition.height;
+  const pole = new THREE.CylinderGeometry(poleRadius, poleRadius, poleHeight, 10);
+  pole.translate(-definition.width * 0.26, poleHeight / 2, 0);
+
+  const clothHeight = Math.max(0.45, definition.height * 0.34);
+  const clothLength = Math.max(0.6, definition.length * 1.1);
+  const cloth = new THREE.BoxGeometry(Math.max(0.08, definition.width * 0.12), clothHeight, clothLength);
+  cloth.translate(0, poleHeight - clothHeight * 0.65, clothLength * 0.08);
+
+  const merged = mergeGeometries([pole, cloth], false);
+  const geometry = merged ?? pole;
+  normalizePivotToBottomCenter(geometry);
+  return geometry;
+}
+
+function createGeometryForShape(definition: BrickDefinition): THREE.BufferGeometry {
+  switch (definition.shape) {
+    case 'block':
+    case 'plate':
+    case 'tile':
+      return createBlockBody(definition);
+    case 'slope':
+      return createSlopeBody(definition);
+    case 'wedge':
+      return createWedgeBody(definition);
+    case 'round':
+      return createRoundBody(definition);
+    case 'quarter_round':
+      return createQuarterRoundBody(definition);
+    case 'arch':
+      return createArchBody(definition);
+    case 'cylinder':
+      return createCylinderBody(definition);
+    case 'chest':
+      return createChestBody(definition);
+    case 'flag':
+      return createFlagBody(definition);
+    default:
+      return createBlockBody(definition);
+  }
+}
+
 function getBodyGeometry(definition: BrickDefinition): THREE.BufferGeometry {
   const cached = geometryCache.get(`body:${definition.id}`);
   if (cached) {
     return cached;
   }
 
-  const geometry = definition.shape === 'slope' ? createSlopeBody(definition) : createBlockBody(definition);
+  const geometry = createGeometryForShape(definition);
   geometryCache.set(`body:${definition.id}`, geometry);
   return geometry;
-}
-
-function getStudGeometry(): THREE.BufferGeometry {
-  const cached = geometryCache.get('stud:default');
-  if (cached) {
-    return cached;
-  }
-
-  const stud = new THREE.CylinderGeometry(
-    BRICK_UNITS.studDiameter / 2,
-    BRICK_UNITS.studDiameter / 2,
-    BRICK_UNITS.studHeight,
-    24,
-  );
-  geometryCache.set('stud:default', stud);
-  return stud;
 }
 
 function getInstancedGeometry(definition: BrickDefinition): THREE.BufferGeometry {
@@ -84,33 +200,8 @@ function getInstancedGeometry(definition: BrickDefinition): THREE.BufferGeometry
   }
 
   const bodyGeometry = getBodyGeometry(definition).clone();
-  if (definition.shape === 'slope') {
-    geometryCache.set(key, bodyGeometry);
-    return bodyGeometry;
-  }
-
-  const parts: THREE.BufferGeometry[] = [bodyGeometry];
-  const studBase = getStudGeometry();
-  for (let x = 0; x < definition.width; x += 1) {
-    for (let z = 0; z < definition.length; z += 1) {
-      const studGeometry = studBase.clone();
-      studGeometry.translate(
-        x - (definition.width - 1) / 2,
-        definition.height + BRICK_UNITS.studHeight / 2,
-        z - (definition.length - 1) / 2,
-      );
-      parts.push(studGeometry);
-    }
-  }
-
-  const merged = mergeGeometries(parts, false);
-  if (!merged) {
-    geometryCache.set(key, bodyGeometry);
-    return bodyGeometry;
-  }
-
-  geometryCache.set(key, merged);
-  return merged;
+  geometryCache.set(key, bodyGeometry);
+  return bodyGeometry;
 }
 
 function getMaterial(color: string, ghost: boolean): THREE.MeshStandardMaterial {
@@ -166,18 +257,11 @@ function buildRenderGroups(bricks: BrickInstance[]): Map<string, BrickInstance[]
   return groups;
 }
 
-function getBrickTopHeight(definition: BrickDefinition): number {
-  if (definition.shape === 'slope') {
-    return definition.height;
-  }
-  return definition.height + BRICK_UNITS.studHeight;
-}
-
 export function computeBrickBounds(brick: Pick<BrickInstance, 'typeId' | 'position' | 'rotation'>): THREE.Box3 {
   const definition = getBrickDefinition(brick.typeId);
   const halfX = definition.width / 2;
   const halfZ = definition.length / 2;
-  const topY = getBrickTopHeight(definition);
+  const topY = definition.height;
 
   const corners: THREE.Vector3[] = [];
   const quaternion = new THREE.Quaternion().setFromEuler(
@@ -262,23 +346,6 @@ export function createBrickMesh(
   bodyMesh.castShadow = true;
   bodyMesh.receiveShadow = true;
   group.add(bodyMesh);
-
-  if (definition.shape !== 'slope') {
-    const studGeometry = getStudGeometry();
-    for (let x = 0; x < definition.width; x += 1) {
-      for (let z = 0; z < definition.length; z += 1) {
-        const stud = new THREE.Mesh(studGeometry, material);
-        stud.position.set(
-          x - (definition.width - 1) / 2,
-          definition.height + BRICK_UNITS.studHeight / 2,
-          z - (definition.length - 1) / 2,
-        );
-        stud.castShadow = true;
-        stud.receiveShadow = true;
-        group.add(stud);
-      }
-    }
-  }
 
   const wrapper = new THREE.Group();
   wrapper.userData.typeId = brick.typeId;

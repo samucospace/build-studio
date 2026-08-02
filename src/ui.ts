@@ -28,6 +28,7 @@ export interface UiApi {
   setToolState: (tool: Tool) => void;
   setSelectedBrick: (brickId: string | null) => void;
   setHintContext: (context: { tool: Tool; snapEnabled: boolean; selectedBrickId: string | null }) => void;
+  setActiveBrickType: (typeId: string) => void;
 }
 
 export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers: UiHandlers): UiApi {
@@ -35,18 +36,30 @@ export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers
     <div id="studio">
       <aside id="sidebar">
         <h2>Bricks</h2>
+        <input id="brick-search" type="search" placeholder="Filter bricks by name..." />
+        <div id="brick-filters">
+          <select id="shape-filter" class="filter-select">
+            <option value="__all">All shapes</option>
+          </select>
+          <button id="clear-filters" type="button">Clear</button>
+        </div>
+        <div id="filter-meta">
+          <span id="result-count">0 results</span>
+          <div id="active-filter-badges"></div>
+        </div>
+        <div id="category-chips"></div>
         <div id="brick-palette"></div>
         <h2>Colors</h2>
         <div id="color-palette"></div>
         <label class="inline-field">Custom
           <input id="custom-color" type="color" value="#E53935" />
         </label>
-        <h2>Controls</h2>
-        <div id="controls-hints"></div>
       </aside>
       <main id="viewport-wrap">
         <div id="topbar">
           <strong>Brick Build Studio</strong>
+          <span class="topbar-spacer"></span>
+          <button id="open-help" type="button">Help</button>
           <div class="toolbar-row">
             <button id="tool-build">Build</button>
             <button id="tool-select">Select</button>
@@ -66,6 +79,15 @@ export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers
           <span id="selected-brick">Selected: none</span>
           <span id="brick-count">0 bricks</span>
         </div>
+        <div id="help-panel" aria-hidden="true">
+          <div class="help-card" role="dialog" aria-modal="true" aria-label="Controls help">
+            <div class="help-header">
+              <strong>Help and Controls</strong>
+              <button id="close-help" type="button">Close</button>
+            </div>
+            <div id="controls-hints"></div>
+          </div>
+        </div>
         <div id="viewport"></div>
         <div id="floating-controls">
           <button id="rot-x">Rotate X (T)</button>
@@ -84,19 +106,199 @@ export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers
   `;
 
   const palette = host.querySelector<HTMLDivElement>('#brick-palette');
+  const searchInput = host.querySelector<HTMLInputElement>('#brick-search');
+  const shapeFilter = host.querySelector<HTMLSelectElement>('#shape-filter');
+  const clearFilters = host.querySelector<HTMLButtonElement>('#clear-filters');
+  const categoryChips = host.querySelector<HTMLDivElement>('#category-chips');
+  const resultCount = host.querySelector<HTMLSpanElement>('#result-count');
+  const activeFilterBadges = host.querySelector<HTMLDivElement>('#active-filter-badges');
   const colorPalette = host.querySelector<HTMLDivElement>('#color-palette');
   const count = host.querySelector<HTMLSpanElement>('#brick-count');
   const selectedText = host.querySelector<HTMLSpanElement>('#selected-brick');
   const snapButton = host.querySelector<HTMLButtonElement>('#snap-toggle');
   const hints = host.querySelector<HTMLDivElement>('#controls-hints');
+  const openHelp = host.querySelector<HTMLButtonElement>('#open-help');
+  const closeHelp = host.querySelector<HTMLButtonElement>('#close-help');
+  const helpPanel = host.querySelector<HTMLDivElement>('#help-panel');
 
-  if (!palette || !colorPalette || !count || !selectedText || !snapButton || !hints) {
+  if (!palette || !searchInput || !shapeFilter || !clearFilters || !categoryChips || !resultCount || !activeFilterBadges || !colorPalette || !count || !selectedText || !snapButton || !hints || !openHelp || !closeHelp || !helpPanel) {
     throw new Error('UI mount failed.');
   }
+
+  const helpCard = helpPanel.querySelector<HTMLDivElement>('.help-card');
+  if (!helpCard) {
+    throw new Error('Help card mount failed.');
+  }
+
+  let helpOpen = false;
+  let touchStartX = 0;
+  let touchCurrentX = 0;
+
+  const isEditableTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  };
+
+  const toggleHelp = (open: boolean): void => {
+    helpOpen = open;
+    helpPanel.classList.toggle('open', open);
+    helpPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    helpCard.style.transform = '';
+  };
+
+  openHelp.addEventListener('click', () => toggleHelp(true));
+  closeHelp.addEventListener('click', () => toggleHelp(false));
+  helpPanel.addEventListener('click', (event) => {
+    if (event.target === helpPanel) {
+      toggleHelp(false);
+    }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (!helpOpen) {
+      return;
+    }
+    if (event.key === 'Escape' && !isEditableTarget(event.target)) {
+      event.preventDefault();
+      toggleHelp(false);
+    }
+  });
+
+  helpCard.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) {
+      return;
+    }
+    touchStartX = event.touches[0].clientX;
+    touchCurrentX = touchStartX;
+  }, { passive: true });
+
+  helpCard.addEventListener('touchmove', (event) => {
+    if (event.touches.length !== 1) {
+      return;
+    }
+    touchCurrentX = event.touches[0].clientX;
+    const delta = Math.max(0, touchCurrentX - touchStartX);
+    helpCard.style.transform = `translateX(${Math.min(delta, 120)}px)`;
+  }, { passive: true });
+
+  helpCard.addEventListener('touchend', () => {
+    const delta = touchCurrentX - touchStartX;
+    if (delta > 80) {
+      toggleHelp(false);
+      return;
+    }
+    helpCard.style.transform = '';
+  });
 
   let currentTool: Tool = 'build';
   let snapEnabled = true;
   let selectedBrickId: string | null = null;
+  let activeBrickType = catalog[0]?.id ?? '';
+  let selectedCategory = '__all';
+  let selectedShape = '__all';
+
+  const categories = Array.from(new Set(catalog.map((item) => item.category)));
+  const shapes = Array.from(new Set(catalog.map((item) => item.shape)));
+
+  const toShapeLabel = (shape: string): string => shape.replace(/_/g, ' ');
+
+  const applyFilterReset = (kind: 'search' | 'category' | 'shape'): void => {
+    if (kind === 'search') {
+      searchInput.value = '';
+    }
+    if (kind === 'category') {
+      selectedCategory = '__all';
+    }
+    if (kind === 'shape') {
+      selectedShape = '__all';
+      shapeFilter.value = '__all';
+    }
+
+    renderCategoryChips();
+    renderPalette();
+  };
+
+  const renderFilterMeta = (visibleCount: number): void => {
+    resultCount.textContent = `${visibleCount} result${visibleCount === 1 ? '' : 's'}`;
+
+    const badges: Array<{ kind: 'search' | 'category' | 'shape'; label: string }> = [];
+    const query = searchInput.value.trim();
+    if (query.length > 0) {
+      badges.push({ kind: 'search', label: `Search: ${query}` });
+    }
+    if (selectedCategory !== '__all') {
+      badges.push({ kind: 'category', label: `Category: ${selectedCategory}` });
+    }
+    if (selectedShape !== '__all') {
+      badges.push({ kind: 'shape', label: `Shape: ${toShapeLabel(selectedShape)}` });
+    }
+
+    activeFilterBadges.innerHTML = '';
+    if (badges.length === 0) {
+      return;
+    }
+
+    for (const badgeDef of badges) {
+      const badge = document.createElement('span');
+      badge.className = 'filter-badge';
+
+      const label = document.createElement('span');
+      label.className = 'filter-badge-label';
+      label.textContent = badgeDef.label;
+
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'filter-badge-remove';
+      removeButton.textContent = 'x';
+      removeButton.title = `Remove ${badgeDef.label}`;
+      removeButton.setAttribute('aria-label', `Remove ${badgeDef.label}`);
+      removeButton.addEventListener('click', () => {
+        applyFilterReset(badgeDef.kind);
+      });
+
+      badge.appendChild(label);
+      badge.appendChild(removeButton);
+      activeFilterBadges.appendChild(badge);
+    }
+  };
+
+  for (const shape of shapes) {
+    const option = document.createElement('option');
+    option.value = shape;
+    option.textContent = toShapeLabel(shape);
+    shapeFilter.appendChild(option);
+  }
+
+  const renderCategoryChips = (): void => {
+    categoryChips.innerHTML = '';
+
+    const allButton = document.createElement('button');
+    allButton.type = 'button';
+    allButton.className = `chip-btn ${selectedCategory === '__all' ? 'active' : ''}`;
+    allButton.textContent = 'All categories';
+    allButton.addEventListener('click', () => {
+      selectedCategory = '__all';
+      renderCategoryChips();
+      renderPalette();
+    });
+    categoryChips.appendChild(allButton);
+
+    for (const category of categories) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `chip-btn ${selectedCategory === category ? 'active' : ''}`;
+      button.textContent = category;
+      button.addEventListener('click', () => {
+        selectedCategory = category;
+        renderCategoryChips();
+        renderPalette();
+      });
+      categoryChips.appendChild(button);
+    }
+  };
 
   const renderHints = (): void => {
     const lines: string[] = [];
@@ -133,13 +335,88 @@ export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers
     hints.innerHTML = lines.join('');
   };
 
-  for (const definition of catalog) {
-    const button = document.createElement('button');
-    button.textContent = definition.id;
-    button.className = 'palette-item';
-    button.addEventListener('click', () => handlers.onBrickTypeChange(definition.id));
-    palette.appendChild(button);
-  }
+  const renderPalette = (): void => {
+    const query = searchInput.value.trim().toLowerCase();
+    const filtered = catalog.filter((definition) => {
+      if (selectedCategory !== '__all' && definition.category !== selectedCategory) {
+        return false;
+      }
+      if (selectedShape !== '__all' && definition.shape !== selectedShape) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return definition.name.toLowerCase().includes(query) || definition.id.toLowerCase().includes(query);
+    });
+
+    renderFilterMeta(filtered.length);
+
+    palette.innerHTML = '';
+    if (filtered.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'palette-empty';
+      empty.textContent = 'No matching bricks.';
+      palette.appendChild(empty);
+      return;
+    }
+
+    const byCategory = new Map<string, BrickDefinition[]>();
+    for (const definition of filtered) {
+      const existing = byCategory.get(definition.category);
+      if (existing) {
+        existing.push(definition);
+      } else {
+        byCategory.set(definition.category, [definition]);
+      }
+    }
+
+    for (const [category, items] of byCategory.entries()) {
+      const section = document.createElement('section');
+      section.className = 'palette-category';
+
+      const title = document.createElement('h3');
+      title.textContent = category;
+      section.appendChild(title);
+
+      const list = document.createElement('div');
+      list.className = 'palette-list';
+
+      for (const definition of items) {
+        const button = document.createElement('button');
+        button.className = 'palette-item palette-row';
+        if (definition.id === activeBrickType) {
+          button.classList.add('active');
+        }
+        button.innerHTML = `<span class="brick-name">${definition.name}</span><span class="brick-id">${definition.id}</span>`;
+        button.addEventListener('click', () => {
+          activeBrickType = definition.id;
+          handlers.onBrickTypeChange(definition.id);
+          renderPalette();
+        });
+        list.appendChild(button);
+      }
+
+      section.appendChild(list);
+      palette.appendChild(section);
+    }
+  };
+
+  searchInput.addEventListener('input', renderPalette);
+  shapeFilter.addEventListener('change', () => {
+    selectedShape = shapeFilter.value;
+    renderPalette();
+  });
+  clearFilters.addEventListener('click', () => {
+    searchInput.value = '';
+    selectedCategory = '__all';
+    selectedShape = '__all';
+    shapeFilter.value = '__all';
+    renderCategoryChips();
+    renderPalette();
+  });
+  renderCategoryChips();
+  renderPalette();
 
   for (const color of DEFAULT_COLORS) {
     const button = document.createElement('button');
@@ -208,6 +485,10 @@ export function createUi(host: HTMLElement, catalog: BrickDefinition[], handlers
       snapEnabled = context.snapEnabled;
       selectedBrickId = context.selectedBrickId;
       renderHints();
+    },
+    setActiveBrickType: (typeId) => {
+      activeBrickType = typeId;
+      renderPalette();
     },
   };
 }
